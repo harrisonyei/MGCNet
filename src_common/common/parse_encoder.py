@@ -34,7 +34,6 @@ def parse_coeff(opt, coeff_all, defined_pose_main):
     pred_3dmm_shape = coeff_all[:,  0                                          : opt.gpmm_rank]
     pred_3dmm_color = coeff_all[:,  opt.gpmm_rank                              : 2 * opt.gpmm_rank]
     pred_3dmm_exp = coeff_all[:,    2 * opt.gpmm_rank                          : 2 * opt.gpmm_rank + opt.gpmm_exp_rank]
-
     #
     pred_pose_render = coeff_all[:, 2 * opt.gpmm_rank + opt.gpmm_exp_rank      : 2 * opt.gpmm_rank + opt.gpmm_exp_rank + 6]
     pred_pose_render = pred_pose_render + defined_pose_main

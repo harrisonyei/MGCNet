@@ -32,8 +32,8 @@ from src_tfGraph.build_graph import MGC_TRAIN
 flags = tf.app.flags
 
 #
-flags.DEFINE_string("dic_image", "data/test/", "Dataset directory")
-flags.DEFINE_string("output_dir", "data/output_test_one", "Output directory")
+flags.DEFINE_string("dic_image", "data/test/my_test/", "Dataset directory")
+flags.DEFINE_string("output_dir", "data/output_mytest", "Output directory")
 flags.DEFINE_string("ckpt_file", "model/model-400000", "checkpoint file")
 #flags.DEFINE_string("ckpt_file", "/home/jiaxiangshang/Downloads/202008/70_31_warpdepthepi_reg/model-400000", "checkpoint file")
 
@@ -60,7 +60,7 @@ flags.DEFINE_boolean("flag_main_save", True, "")
 
 FLAGS = flags.FLAGS
 
-if __name__ == '__main__':
+def main():
     FLAGS.dic_image = os.path.join(_cur_dir, FLAGS.dic_image)
     FLAGS.output_dir = os.path.join(_cur_dir, FLAGS.output_dir)
 
@@ -83,10 +83,14 @@ if __name__ == '__main__':
     """
     build graph
     """
+    import time
+    time_st = time.time()
     system = MGC_TRAIN(FLAGS)
     system.build_test_graph(
         FLAGS, img_height=FLAGS.img_height, img_width=FLAGS.img_width, batch_size=FLAGS.batch_size
     )
+    time_end = time.time()
+    print("Time build: ", time_end - time_st)
 
     """
     load model
@@ -97,161 +101,221 @@ if __name__ == '__main__':
     saver = tf.train.Saver([var for var in test_var])
 
     #config = tf.ConfigProto()
-    config=tf.ConfigProto(device_count={'cpu':0})
+    #Edited: tell tensorflow that we have 4 gpu available
+    config=tf.ConfigProto(device_count = {'GPU': 4})
     config.gpu_options.allow_growth = True
+    #Edited: limit the gpu memory usage
+    config.gpu_options.per_process_gpu_memory_fraction = 0.9
+    #Edited: allow tensorflow to choose the devices
+    config.allow_soft_placement = True
+
     with tf.Session(config=config) as sess:
         sess.run(tf.global_variables_initializer())
         sess.graph.finalize()
+
+        # with open('op.txt','a') as f:
+        #     f.write(str(sess.graph.get_operations()))
+            
         saver.restore(sess, FLAGS.ckpt_file)
+
         #
-        import time
+
+        files = []
+        for (dirpath, dirnames, filenames) in os.walk(FLAGS.dic_image):
+            files.extend(filenames)
+            break
+            
         # preprocess
-        path_image = os.path.join(FLAGS.dic_image, 'image04275.jpg')
-        image_bgr = cv2.imread(path_image)
+        f_test = "IMG_1346.jpg"
+        path_image_test = os.path.join(FLAGS.dic_image, f_test)
+        image_bgr = cv2.imread(path_image_test)
         image_rgb = image_bgr[..., ::-1]
         if image_bgr is None:
-            print("Error: can not find ", path_image)
+            print("Error: can not find ", path_image_test)
+
         with torch.no_grad():
             lm_howfar = lm_d_hf.lm_detection_howfar(image_bgr)
-            lm_howfar = lm_howfar[:, :2]
+            try:
+                lm_howfar = lm_howfar[:, :2]
+            except:
+                print("Error: detection failed ", path_image_test)
 
         # face image align by landmark
         # we also provide a tools to generate 'std_224_bfm09'
         lm_trans, img_warped, tform = crop_align_affine_transform(lm_howfar, image_rgb, FLAGS.img_height, std_224_bfm09)
-        image_rgb_b = img_warped[None, ...]
-        # M_inv is used to back project the face reconstruction result to origin image
-        M_inv = np.linalg.inv(tform.params)
-        M = tform.params
-        #print(np.matmul(M_inv, M))
+        image_rgb_b_test = img_warped[None, ...]
 
-        """
-        Start
-        """
-        time_st = time.time()
-        pred = system.inference(sess, image_rgb_b)
-        time_end = time.time()
-        print("Time each batch: ", time_end - time_st)
+        pred_exp_test = system.inference(sess, image_rgb_b_test)
+        exp_test = pred_exp_test['coeff_exp']
 
-        # name
-        dic_image, name_image = os.path.split(path_image)
-        name_image_pure, _ = os.path.splitext(name_image)
+        for f in files:
 
-        """
-        Render
-        """
-        image_input = image_rgb_b
+            # preprocess
+            path_image = os.path.join(FLAGS.dic_image, f)
+            image_bgr = cv2.imread(path_image)
+            image_rgb = image_bgr[..., ::-1]
+            if image_bgr is None:
+                print("Error: can not find ", path_image)
+                continue
 
-        """
-        NP
-        """
-        b = 0
-        vertex_shape = pred['vertex_shape'][0][b, :, :]
-        vertex_color = pred['vertex_color'][0][b, :, :]
-        vertex_color = np.clip(vertex_color, 0, 1)
-        #vertex_color_rgba = np.concatenate([vertex_color, np.ones([vertex_color.shape[0], 1])], axis=1)
-        vertex_color_ori = pred['vertex_color_ori'][0][b, :, :]
-        vertex_color_ori = np.clip(vertex_color_ori, 0, 1)
+            with torch.no_grad():
+                lm_howfar = lm_d_hf.lm_detection_howfar(image_bgr)
+                try:
+                    lm_howfar = lm_howfar[:, :2]
+                except:
+                    print("Error: detection failed ", path_image)
+                    continue
 
-        if FLAGS.flag_eval:
-            mesh_tri = trimesh.Trimesh(
-                vertex_shape.reshape(-1, 3),
-                system.h_lrgp.h_curr.mesh_tri_np.reshape(-1, 3),
-                vertex_colors=vertex_color.reshape(-1, 3),
-                process=False
-            )
-            mesh_tri.visual.kind == 'vertex'
 
-            path_mesh_save = os.path.join(FLAGS.output_dir, name_image_pure + ".ply")
-            mesh_tri.export(path_mesh_save)
-            """
-            Landmark 3D
-            """
-            path_lm3d_save = os.path.join(FLAGS.output_dir, name_image_pure + "_lm3d.txt")
-            lm_68 = vertex_shape[system.h_lrgp.h_curr.idx_lm68_np]
-
-            write_self_lm(path_lm3d_save, lm_68)
+            # face image align by landmark
+            # we also provide a tools to generate 'std_224_bfm09'
+            lm_trans, img_warped, tform = crop_align_affine_transform(lm_howfar, image_rgb, FLAGS.img_height, std_224_bfm09)
+            image_rgb_b = img_warped[None, ...]
+            # M_inv is used to back project the face reconstruction result to origin image
+            M_inv = np.linalg.inv(tform.params)
+            M = tform.params
+            #print(np.matmul(M_inv, M))
 
             """
-            Landmark 2D
+            Start
+            """
+            time_st = time.time()
+            pred = system.inference(sess, image_rgb_b, exp_coeff = exp_test[0])
+            time_end = time.time()
+            print("Time each batch: ", time_end - time_st)
+
+            # name
+            dic_image, name_image = os.path.split(path_image)
+            name_image_pure, _ = os.path.splitext(name_image)
 
             """
-            lm2d = pred['lm2d'][0][b, :, :]
-            path_lm2d_save = os.path.join(FLAGS.output_dir, name_image_pure + "_lm2d.txt")
-            write_self_lm(path_lm2d_save, lm2d)
+            Render
+            """
+            image_input = image_rgb_b
 
             """
-            Pose
+            NP
             """
-            path_cam_save = os.path.join(FLAGS.output_dir, name_image_pure + "_cam.txt")
+            b = 0
+            vertex_shape = pred['vertex_shape'][0][b, :, :]
+            vertex_color = pred['vertex_color'][0][b, :, :]
+            vertex_color = np.clip(vertex_color, 0, 1)
+            #vertex_color_rgba = np.concatenate([vertex_color, np.ones([vertex_color.shape[0], 1])], axis=1)
+            vertex_color_ori = pred['vertex_color_ori'][0][b, :, :]
+            vertex_color_ori = np.clip(vertex_color_ori, 0, 1)
 
-            pose = pred['gpmm_pose'][0][b, :]
-            intrinsic = pred['gpmm_intrinsic'][b, :, :]
+            output_folder = os.path.join(FLAGS.output_dir, name_image_pure)
 
-            write_self_camera(path_cam_save, FLAGS.img_width, FLAGS.img_height, intrinsic, pose)
+            if not os.path.exists(output_folder):
+                os.mkdir(output_folder)
 
-        """
-        Common visual
-        """
-        if FLAGS.flag_visual:
-            # visual
-            result_overlayMain_255 = pred['overlayMain_255'][0][b, :, :]
-            result_overlayTexMain_255 = pred['overlayTexMain_255'][0][b, :, :]
-            result_overlayGeoMain_255 = pred['overlayGeoMain_255'][0][b, :, :]
-            result_overlayLightMain_255 = pred['overlayLightMain_255'][0][b, :, :]
-            result_apper_mulPose_255 = pred['apper_mulPose_255'][0][b, :, :]
+            if False and FLAGS.flag_eval:
+                mesh_tri = trimesh.Trimesh(
+                    vertex_shape.reshape(-1, 3),
+                    system.h_lrgp.h_curr.mesh_tri_np.reshape(-1, 3),
+                    vertex_colors=vertex_color.reshape(-1, 3),
+                    process=False
+                )
+                mesh_tri.visual.kind == 'vertex'
 
-            result_overlay_255 = pred['overlay_255'][0][b, :, :]
-            result_overlayTex_255 = pred['overlayTex_255'][0][b, :, :]
-            result_overlayGeo_255 = pred['overlayGeo_255'][0][b, :, :]
-            result_overlayLight_255 = pred['overlayLight_255'][0][b, :, :]
+                
 
-            # common
-            visual_concat = np.concatenate([image_input[0], result_overlay_255, result_overlayGeo_255, result_apper_mulPose_255], axis=1)
-            path_image_save = os.path.join(FLAGS.output_dir, name_image_pure + "_mulPoses.jpg")
-            plt.imsave(path_image_save, visual_concat)
+                path_mesh_save = os.path.join(output_folder, name_image_pure + ".ply")
+                mesh_tri.export(path_mesh_save)
+                """
+                Landmark 3D
+                """
+                path_lm3d_save = os.path.join(output_folder, name_image_pure + "_lm3d.txt")
+                lm_68 = vertex_shape[system.h_lrgp.h_curr.idx_lm68_np]
 
-            if FLAGS.flag_overlayOrigin_save:
-                gpmm_render_mask = pred['gpmm_render_mask'][0][b, :, :]
-                gpmm_render_mask = np.tile(gpmm_render_mask, reps=(1, 1, 3))
+                write_self_lm(path_lm3d_save, lm_68)
 
-                path_image_origin = os.path.join(dic_image, name_image_pure + ".jpg")
-                image_origin = cv2.imread(path_image_origin)
+                """
+                Landmark 2D
 
-                gpmm_render_overlay_wo = inverse_affine_warp_overlay(
-                    M_inv, image_origin, result_overlay_255, gpmm_render_mask)
-                gpmm_render_overlay_texture_wo = inverse_affine_warp_overlay(
-                    M_inv, image_origin, result_overlayTex_255, gpmm_render_mask)
-                gpmm_render_overlay_gary_wo = inverse_affine_warp_overlay(
-                    M_inv, image_origin, result_overlayGeo_255, gpmm_render_mask)
-                gpmm_render_overlay_illu_wo = inverse_affine_warp_overlay(
-                    M_inv, image_origin, result_overlayLight_255, gpmm_render_mask)
+                """
+                lm2d = pred['lm2d'][0][b, :, :]
+                path_lm2d_save = os.path.join(output_folder, name_image_pure + "_lm2d.txt")
+                write_self_lm(path_lm2d_save, lm2d)
 
-                path_image_save = os.path.join(FLAGS.output_dir, name_image_pure + "_overlayOrigin.jpg")
-                cv2.imwrite(path_image_save, gpmm_render_overlay_wo)
-                path_image_save = os.path.join(FLAGS.output_dir, name_image_pure + "_overlayTexOrigin.jpg")
-                # cv2.imwrite(path_image_save, gpmm_render_overlay_texture_wo)
-                path_image_save = os.path.join(FLAGS.output_dir, name_image_pure + "_overlayGeoOrigin.jpg")
-                cv2.imwrite(path_image_save, gpmm_render_overlay_gary_wo)
-                path_image_save = os.path.join(FLAGS.output_dir, name_image_pure + "_overlayLightOrigin.jpg")
-                # cv2.imwrite(path_image_save, gpmm_render_overlay_illu_wo)
+                """
+                Pose
+                """
+                path_cam_save = os.path.join(output_folder, name_image_pure + "_cam.txt")
 
-            if FLAGS.flag_main_save:
-                path_image_save = os.path.join(FLAGS.output_dir, name_image_pure + "_overlayMain.jpg")
-                plt.imsave(path_image_save, result_overlayMain_255)
-                path_image_save = os.path.join(FLAGS.output_dir, name_image_pure + "_overlayTexMain.jpg")
-                #plt.imsave(path_image_gray_main_overlay, gpmm_render_overlay)
-                path_image_save = os.path.join(FLAGS.output_dir, name_image_pure + "_overlayGeoMain.jpg")
-                plt.imsave(path_image_save, result_overlayGeoMain_255)
-                path_image_save = os.path.join(FLAGS.output_dir, name_image_pure + "_overlayLightMain.jpg")
-                #cv2.imwrite(path_image_save, result_overlayLightMain_255)
+                pose = pred['gpmm_pose'][0][b, :]
+                intrinsic = pred['gpmm_intrinsic'][b, :, :]
 
-            if FLAGS.flag_overlay_save:
-                path_image_save = os.path.join(FLAGS.output_dir, name_image_pure + "_overlay.jpg")
-                plt.imsave(path_image_save, result_overlay_255)
-                path_image_save = os.path.join(FLAGS.output_dir, name_image_pure + "_overlayTex.jpg")
-                plt.imsave(path_image_save, result_overlayTex_255)
-                path_image_save = os.path.join(FLAGS.output_dir, name_image_pure + "_overlayGeo.jpg")
-                plt.imsave(path_image_save, result_overlayGeo_255)
-                path_image_save = os.path.join(FLAGS.output_dir, name_image_pure + "_overlayLight.jpg")
-                plt.imsave(path_image_save, result_overlayLight_255)
+                write_self_camera(path_cam_save, FLAGS.img_width, FLAGS.img_height, intrinsic, pose)
+
+            """
+            Common visual
+            """
+
+            if FLAGS.flag_visual:
+                # visual
+                result_overlayMain_255 = pred['overlayMain_255'][0][b, :, :]
+                result_overlayTexMain_255 = pred['overlayTexMain_255'][0][b, :, :]
+                result_overlayGeoMain_255 = pred['overlayGeoMain_255'][0][b, :, :]
+                result_overlayLightMain_255 = pred['overlayLightMain_255'][0][b, :, :]
+                result_apper_mulPose_255 = pred['apper_mulPose_255'][0][b, :, :]
+
+                result_overlay_255 = pred['overlay_255'][0][b, :, :]
+                result_overlayTex_255 = pred['overlayTex_255'][0][b, :, :]
+                result_overlayGeo_255 = pred['overlayGeo_255'][0][b, :, :]
+                result_overlayLight_255 = pred['overlayLight_255'][0][b, :, :]
+
+                # common
+                visual_concat = np.concatenate([image_input[0], result_overlay_255, result_overlayGeo_255, result_apper_mulPose_255], axis=1)
+                path_image_save = os.path.join(output_folder, name_image_pure + "_mulPoses.jpg")
+                plt.imsave(path_image_save, visual_concat)
+
+                if FLAGS.flag_overlayOrigin_save:
+                    gpmm_render_mask = pred['gpmm_render_mask'][0][b, :, :]
+                    gpmm_render_mask = np.tile(gpmm_render_mask, reps=(1, 1, 3))
+
+                    path_image_origin = os.path.join(dic_image, name_image_pure + ".jpg")
+                    image_origin = cv2.imread(path_image_origin)
+
+                    gpmm_render_overlay_wo = inverse_affine_warp_overlay(
+                        M_inv, image_origin, result_overlay_255, gpmm_render_mask)
+                    gpmm_render_overlay_texture_wo = inverse_affine_warp_overlay(
+                        M_inv, image_origin, result_overlayTex_255, gpmm_render_mask)
+                    gpmm_render_overlay_gary_wo = inverse_affine_warp_overlay(
+                        M_inv, image_origin, result_overlayGeo_255, gpmm_render_mask)
+                    gpmm_render_overlay_illu_wo = inverse_affine_warp_overlay(
+                        M_inv, image_origin, result_overlayLight_255, gpmm_render_mask)
+
+                    path_image_save = os.path.join(output_folder, name_image_pure + "_overlayOrigin.jpg")
+                    cv2.imwrite(path_image_save, gpmm_render_overlay_wo)
+                    path_image_save = os.path.join(output_folder, name_image_pure + "_overlayTexOrigin.jpg")
+                    # cv2.imwrite(path_image_save, gpmm_render_overlay_texture_wo)
+                    path_image_save = os.path.join(output_folder, name_image_pure + "_overlayGeoOrigin.jpg")
+                    cv2.imwrite(path_image_save, gpmm_render_overlay_gary_wo)
+                    path_image_save = os.path.join(output_folder, name_image_pure + "_overlayLightOrigin.jpg")
+                    # cv2.imwrite(path_image_save, gpmm_render_overlay_illu_wo)
+
+                if FLAGS.flag_main_save:
+                    path_image_save = os.path.join(output_folder, name_image_pure + "_overlayMain.jpg")
+                    plt.imsave(path_image_save, result_overlayMain_255)
+                    path_image_save = os.path.join(output_folder, name_image_pure + "_overlayTexMain.jpg")
+                    #plt.imsave(path_image_gray_main_overlay, gpmm_render_overlay)
+                    path_image_save = os.path.join(output_folder, name_image_pure + "_overlayGeoMain.jpg")
+                    plt.imsave(path_image_save, result_overlayGeoMain_255)
+                    path_image_save = os.path.join(output_folder, name_image_pure + "_overlayLightMain.jpg")
+                    #cv2.imwrite(path_image_save, result_overlayLightMain_255)
+
+                if FLAGS.flag_overlay_save:
+                    path_image_save = os.path.join(output_folder, name_image_pure + "_overlay.jpg")
+                    plt.imsave(path_image_save, result_overlay_255)
+                    path_image_save = os.path.join(output_folder, name_image_pure + "_overlayTex.jpg")
+                    plt.imsave(path_image_save, result_overlayTex_255)
+                    path_image_save = os.path.join(output_folder, name_image_pure + "_overlayGeo.jpg")
+                    plt.imsave(path_image_save, result_overlayGeo_255)
+                    path_image_save = os.path.join(output_folder, name_image_pure + "_overlayLight.jpg")
+                    plt.imsave(path_image_save, result_overlayLight_255)
+
+
+if __name__ == '__main__':
+    main()
 

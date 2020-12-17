@@ -933,13 +933,27 @@ class MGC_TRAIN(object):
         self.set_constant_test()
 
         # single view
+        self.new_exp = tf.placeholder(tf.float32, [self.batch_size, self.opt.gpmm_exp_rank], name='new_exp')
+        self.cond = tf.placeholder(tf.int32, [], name='cond')
+
         list_coeffALL = pred_encoder_coeff_light(self.opt, self.defined_pose_main, self.list_input_float, is_training=False)
 
         dict_loss_common, dict_intermedate_common = \
             self.build_decoderCommon(list_coeffALL, self.list_input_float)
+
+        def pred_exp(): 
+            return dict_intermedate_common['pred_coeff_exp'][0]
+        def new_exp():
+            return self.new_exp
+
+        #dict_intermedate_common['pred_coeff_exp'] = self.new_exp
+        print("old", dict_intermedate_common['pred_coeff_exp'])
+        dict_intermedate_common['pred_coeff_exp'][0] = \
+             tf.cond(tf.squeeze(self.cond) > 0, new_exp, pred_exp)
+        print("new", dict_intermedate_common['pred_coeff_exp'])
         self.dict_inter_comm = dict_intermedate_common
         self.dict_loss_common = dict_loss_common
-
+        
         # multi-level
         self.list_vertex, self.list_vertexNormal, self.list_vertexColor, self.list_vertexShade, self.list_vertexColorOri = \
             decoder_colorMesh_test(self.h_lrgp, self.dict_inter_comm, exp=True)
@@ -1067,7 +1081,7 @@ class MGC_TRAIN(object):
                 self.apper_mulPose_255.append(apper_mulPose_255)
 
 
-    def inference(self, sess, inputs):
+    def inference(self, sess, inputs, exp_coeff=None):
         fetches = {}
 
         # Eval
@@ -1094,12 +1108,28 @@ class MGC_TRAIN(object):
 
             fetches['apper_mulPose_255'] = self.apper_mulPose_255
 
+
         # lm2d, pose
         fetches['lm2d'] = self.dict_inter_comm['pred_lm2d']
         fetches['gpmm_pose'] = self.dict_inter_comm['pred_6dof_pose']
         fetches['gpmm_intrinsic'] = self.intrinsics_single
 
-        #
-        results = sess.run(fetches, feed_dict={'pl_input:0':inputs})
+        fetches['coeff_shape'] = self.dict_inter_comm['pred_coeff_shape']
+        fetches['coeff_color'] = self.dict_inter_comm['pred_coeff_color']
+        fetches['coeff_exp']   = self.dict_inter_comm['pred_coeff_exp']
+        fetches['coeff_light'] = self.dict_inter_comm['pred_coeff_light']
+        
+        fetches['cam_mv'] = self.dict_inter_comm['pred_cam_mv']
+        fetches['cam_eye'] = self.dict_inter_comm['pred_cam_eye']
 
+        #
+        if exp_coeff is None:
+            results = sess.run(fetches, feed_dict={'pl_input:0':inputs,\
+            'cond:0':0, 'new_exp:0': np.zeros((self.batch_size, self.opt.gpmm_exp_rank), np.float32)})
+            print("NOT USE")
+        else:
+            results = sess.run(fetches, feed_dict={'pl_input:0':inputs,\
+            'cond:0':1, 'new_exp:0': exp_coeff})
+            print("USE")
+        
         return results
