@@ -1081,6 +1081,20 @@ class MGC_TRAIN(object):
                 self.apper_mulPose_255.append(apper_mulPose_255)
 
 
+    def inference_exp_coeff(self, sess, inputs):
+        fetches = {}
+
+        # Eval
+        #fetches['coeff_shape'] = self.dict_inter_comm['pred_coeff_shape']
+        #fetches['coeff_color'] = self.dict_inter_comm['pred_coeff_color']
+        fetches['coeff_exp']   = self.dict_inter_comm['pred_coeff_exp']
+        #fetches['coeff_light'] = self.dict_inter_comm['pred_coeff_light']
+
+        results = sess.run(fetches, feed_dict={'pl_input:0':inputs,\
+            'cond:0':0, 'new_exp:0': np.zeros((self.batch_size, self.opt.gpmm_exp_rank), np.float32)})
+        
+        return results
+
     def inference(self, sess, inputs, exp_coeff=None):
         fetches = {}
 
@@ -1108,7 +1122,6 @@ class MGC_TRAIN(object):
 
             fetches['apper_mulPose_255'] = self.apper_mulPose_255
 
-
         # lm2d, pose
         fetches['lm2d'] = self.dict_inter_comm['pred_lm2d']
         fetches['gpmm_pose'] = self.dict_inter_comm['pred_6dof_pose']
@@ -1126,10 +1139,8 @@ class MGC_TRAIN(object):
         if exp_coeff is None:
             results = sess.run(fetches, feed_dict={'pl_input:0':inputs,\
             'cond:0':0, 'new_exp:0': np.zeros((self.batch_size, self.opt.gpmm_exp_rank), np.float32)})
-            print("NOT USE")
         else:
             results = sess.run(fetches, feed_dict={'pl_input:0':inputs,\
             'cond:0':1, 'new_exp:0': exp_coeff})
-            print("USE")
         
         return results
