@@ -169,11 +169,11 @@ def main():
         s_e = (pt_mean + source_mesh_diff + source_exp_diff).reshape(-1, 3) # exprssion
 
         coeff_pts = np.array(pts_cam[i_target]).reshape((rank, 1))
-        coeff_pts[1] = 2
+        coeff_pts[1] = -3
         coeff_pts[2] = 5
-        coeff_pts[3] = 3
-        coeff_pts[4] = 4
-        coeff_pts[5] = 5
+        coeff_pts[3] = 4
+        coeff_pts[4] = 3
+        coeff_pts[5] = -2.5
         """
         Vertex target
         """
@@ -214,7 +214,7 @@ def main():
             i1 = face[1]
             i2 = face[2]
 
-            # transformation Ai
+            # local transformation Ai
             Ai = np.ndarray((3,3),dtype=np.float64)
             dn = np.ndarray((2,3),dtype=np.float64)
             de = np.ndarray((2,3),dtype=np.float64)
@@ -245,74 +245,44 @@ def main():
             b[f_idx * 6 + 4] = t_dn[1,1]
             b[f_idx * 6 + 5] = t_dn[1,2]
 
-            # de[0] = s_e[i1] - s_e[i0]
-            # de[1] = s_e[i2] - s_e[i0]
+        # pseudo inverse of matrix A_p => (At * A)^-1 * A
+        u, s, vh = np.linalg.svd(A, full_matrices=False)
+        smat = np.diag(s)
+        A_p = np.matmul(np.transpose(vh), np.matmul(np.linalg.inv(smat), np.transpose(u)))
 
-            # b[f_idx * 6 + 0] = de[0,0] - t_dn[0,0]
-            # b[f_idx * 6 + 1] = de[0,1] - t_dn[0,1]
-            # b[f_idx * 6 + 2] = de[0,2] - t_dn[0,2]
-            # b[f_idx * 6 + 3] = de[1,0] - t_dn[1,0]
-            # b[f_idx * 6 + 4] = de[1,1] - t_dn[1,1]
-            # b[f_idx * 6 + 5] = de[1,2] - t_dn[1,2]
+        # la = np.matmul(np.transpose(A), A)
+        # lb = np.matmul(np.transpose(A), b)
+        # new_exp = np.linalg.solve(la, lb)
 
-        la = np.matmul(np.transpose(A), A)
-        lb = np.matmul(np.transpose(A), b)
+        new_exp = np.matmul(A_p, b) # pseudo inv runs 1.3x faster than linalg.solve
 
-        new_exp = np.linalg.solve(la, lb)
         new_exp_diff = np.matmul(exp_pcaBasis, new_exp)
         new_exp_diff = np.transpose(new_exp_diff)
 
-        t_e = (pt_mean + target_mesh_diff + new_exp_diff).reshape(-1, 3) # exprssion
+        t_e = (pt_mean + target_mesh_diff + new_exp_diff).reshape(-1, 3) # exprssion tranfer by solving quadrics
 
-        ## instanciate mesh
-        tri_mesh_neutral = trimesh.Trimesh(
-                t_n,
-                mesh_tri,
-                #vertex_colors=rgb_mean_3d,
-                process = False
-            )
-        tri_mesh_neutral.visual.kind == 'vertex'
-        path_mesh_save = os.path.join(FLAGS.output_dir, "output_neutral" + ".ply")
-        tri_mesh_neutral.export(path_mesh_save)
+        def instanciate_mesh(name, vertices, export=True):
+            ## instanciate mesh
+            tri_mesh = trimesh.Trimesh(
+                    vertices,
+                    mesh_tri,
+                    #vertex_colors=rgb_mean_3d,
+                    process = False
+                )
+            if export:
+                tri_mesh.visual.kind == 'vertex'
+                path_mesh_save = os.path.join(FLAGS.output_dir, name + ".ply")
+                tri_mesh.export(path_mesh_save)
+            return tri_mesh
 
-        ## instanciate mesh
-        tri_mesh = trimesh.Trimesh(
-                t_e,
-                mesh_tri,
-                #vertex_colors=rgb_mean_3d,
-                process = False
-            )
+        instanciate_mesh("target_neu", t_n)
+        instanciate_mesh("target_exp", t_e)
 
-        tri_mesh.visual.kind == 'vertex'
-        path_mesh_save = os.path.join(FLAGS.output_dir, "output_expression" + ".ply")
-        tri_mesh.export(path_mesh_save)
+        t_e = (pt_mean + target_mesh_diff + source_exp_diff).reshape(-1, 3) # exprssion directly replace coefficients
+        instanciate_mesh("target_rlp", t_e)
 
-
-        t_e = (pt_mean + target_mesh_diff + source_exp_diff).reshape(-1, 3) # exprssion
-        ## instanciate mesh
-        tri_mesh = trimesh.Trimesh(
-                t_e,
-                mesh_tri,
-                #vertex_colors=rgb_mean_3d,
-                process = False
-            )
-
-        tri_mesh.visual.kind == 'vertex'
-        path_mesh_save = os.path.join(FLAGS.output_dir, "output_exp_direct" + ".ply")
-        tri_mesh.export(path_mesh_save)
-
-
-         ## instanciate mesh
-        tri_mesh = trimesh.Trimesh(
-                s_e,
-                mesh_tri,
-                #vertex_colors=rgb_mean_3d,
-                process = False
-            )
-
-        tri_mesh.visual.kind == 'vertex'
-        path_mesh_save = os.path.join(FLAGS.output_dir, "output_source" + ".ply")
-        tri_mesh.export(path_mesh_save)
+        instanciate_mesh("source_neu", s_n)
+        instanciate_mesh("source_exp", s_e)
 
     print("DONE")
 
